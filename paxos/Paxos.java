@@ -2,8 +2,13 @@ package paxos;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
 import java.rmi.registry.Registry;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
+
 
 /**
  * This class is the main class you need to implement paxos instances.
@@ -22,6 +27,46 @@ public class Paxos implements PaxosRMI, Runnable{
     AtomicBoolean unreliable;// for testing
 
     // Your data here
+    public class ProposalNumberGenerator {
+        private int me;
+        private int N;
+        private int cnt;
+
+        public ProposalNumberGenerator(int me, int N) {
+            this.me = me;
+            this.N = N;
+            cnt = 0;
+        }
+
+        public int next() {
+            return me + N * (cnt++);
+        }
+    }
+
+    public class PaxosInstance {
+        public ProposalNumberGenerator gen; // gen.next() returns the next proposer number. Guaranteed the return number is totally ordered
+        public int n_p; // highest number in a prepare request to which this acceptor has responded
+        public int n_a; // proposal number of the highest-numbered proposal this acceptor has ever accepted
+        public Object v_a; // proposal value of the highest-numbered proposal this acceptor has ever accepted.
+        public Object valueOriginallyPlanned; // value originally planned to propose; passed from the client code in Start() method.
+        public State state;
+
+        public PaxosInstance(ProposalNumberGenerator gen) {
+            this.gen = gen;
+            n_p = -1;
+            n_a = -1;
+            v_a = null;
+            valueOriginallyPlanned = null;
+            state = State.Pending;
+        }
+    }
+
+    private Map<Integer, PaxosInstance> paxosInstances; // mapping from instance ID (sometimes called sequence number or just seq) to an instance of this Paxos peer (i.e. an instance of the server this Paxos object tries to model)
+    private int seq_highestNumberedEndedInstance; // sequence number of the highest-numbered instance that is no longer needed. This number should not appear in paxosInstances as keys.
+    private int currSeq;
+
+
+
 
 
     /**
@@ -39,6 +84,8 @@ public class Paxos implements PaxosRMI, Runnable{
         this.unreliable = new AtomicBoolean(false);
 
         // Your initialization code here
+        paxosInstances = new HashMap<>();
+        seq_highestNumberedEndedInstance = -1;
 
 
         // register peers, do not modify this part
@@ -107,27 +154,133 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Start(int seq, Object value){
         // Your code here
+
+        // Ignore the proposal if seq <= this.seq_highestNumberedEndedInstance
+        if (seq <= this.seq_highestNumberedEndedInstance) {
+            return;
+        }
+
+        // Ignore the proposal if it has a pending proposal
+        if (this.paxosInstances.containsKey(seq)) {
+            return;
+        }
+
+        System.out.println("Start(" + seq + ", " + value + ").");
+        PaxosInstance paxosInstance = new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length));
+        paxosInstance.valueOriginallyPlanned = value;
+        this.paxosInstances.put(seq, paxosInstance);
+
+
+        this.currSeq = seq; // a hacky way to pass "seq" information to run().
+        System.out.println("about to run run(). this.currSeq = " + this.currSeq);
+        this.run();
     }
 
     @Override
     public void run(){
         //Your code here
+        int currSeq = this.currSeq;
+        PaxosInstance paxosInstance = this.paxosInstances.get(currSeq); // precondition: Start() should make sure there is a PaxosInstance in the map with key=currSeq.
+
+        // repeated try to issue a proposal with a monotonically increasing proposal number until decided
+        while (paxosInstance.state != State.Decided) {
+            Response[] responses = new Response[this.peers.length];
+
+            // 0. Get the next proposal number
+            int n = paxosInstance.gen.next();
+            System.out.println("Phase 1, proposing n = " + n + " nPaxos = " + this.peers.length);
+
+            // 1. Send a "prepare" request to all servers including itself
+            for (int id = 0; id < this.peers.length; ++id) {
+                // "prepare" requests don't have a value, only a proposal number
+                responses[id] = Call("Prepare", new Request(currSeq, n, null), id);
+                System.out.println("responses["+id+"] = " +responses[id]);
+            }
+
+            System.out.println("prepare responses = " + responses);
+
+            // 2. If received prepareOK from majority of acceptors
+            if (isMajorityResponsesOK(responses)) {
+                System.out.println("phase 2");
+                // 2.1. find the value to propose for proposal number n.
+                Object valToPropose = highestNumberedProposalValue(responses, paxosInstance.valueOriginallyPlanned);
+
+                // 2.2. send "accept" request to all servers including itself
+                for (int id = 0; id < this.peers.length; ++id) {
+                    responses[id] = Call("Accept", new Request(currSeq, n, valToPropose), id);
+                }
+
+                // 3. If received acceptOK from majority of acceptors
+                if (isMajorityResponsesOK(responses)) {
+                    // 3.1. send "decide" request to all servers including itself
+                    for (int id = 0; id < this.peers.length; ++id) {
+                        responses[id] = Call("Decide", new Request(currSeq, n, valToPropose), id);
+                    }
+                }
+            }
+        }
+    }
+
+    // check whether the majority of responses are OK
+    private boolean isMajorityResponsesOK(Response[] responses) {
+        int majorityNumber = responses.length / 2 + 1;
+        int numberOfOKResponses = 0;
+        for (Response r : responses) {
+            if (r != null && r.ok) {
+                numberOfOKResponses += 1;
+            }
+        }
+        return numberOfOKResponses >= majorityNumber;
+    }
+
+    // return the highest numbered proposal value from responses, or valuePlannedOriginally if responses report no proposal
+    private Object highestNumberedProposalValue(Response[] responses, Object valuePlannedOriginally) {
+        Object result = null;
+        int currHighestProposalNumber = -1;
+        for (Response r : responses) {
+            if (r != null && r.ok && r.n > currHighestProposalNumber) {
+                currHighestProposalNumber = r.n;
+                result = r.value;
+            }
+        }
+        return result == null ? valuePlannedOriginally : result;
     }
 
     // RMI handler
     public Response Prepare(Request req){
         // your code here
 
+        // get "me" (this server) at the instance req is referring to
+        PaxosInstance me = this.paxosInstances.get(req.seq);
+        boolean ok = false;
+
+        if (req.n > me.n_p) {
+            me.n_p = req.n;
+            ok = true;
+        }
+
+        return new Response(ok, req.seq, me.n_a, me.v_a); // respond with a promise and the highest-numbered accepted proposal
     }
 
     public Response Accept(Request req){
         // your code here
+        PaxosInstance me = this.paxosInstances.get(req.seq);
+        boolean ok = false;
 
+        if (req.n >= me.n_p) {
+            me.n_p = req.n;
+            me.n_a = req.n;
+            me.v_a = req.value;
+            ok = true;
+        }
+
+        return new Response(ok, req.seq, req.n, req.value); // the seq, n, value fields in the response are not used
     }
 
     public Response Decide(Request req){
         // your code here
-
+        this.paxosInstances.get(req.seq).state = State.Decided;
+        return new Response(true, req.seq, req.n, req.value); // the seq, n, value fields in the response are not used
     }
 
     /**
@@ -138,6 +291,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Done(int seq) {
         // Your code here
+        this.seq_highestNumberedEndedInstance = seq;
     }
 
 
@@ -148,6 +302,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public int Max(){
         // Your code here
+        return Collections.max(this.paxosInstances.keySet());
     }
 
     /**
@@ -180,7 +335,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public int Min(){
         // Your code here
-
+        return 0;
     }
 
 
@@ -194,7 +349,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public retStatus Status(int seq){
         // Your code here
-
+        return new retStatus(this.paxosInstances.get(seq).state, this.paxosInstances.get(seq).v_a);
     }
 
     /**

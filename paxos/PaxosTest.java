@@ -86,6 +86,7 @@ public class PaxosTest {
         System.out.println("Test: Single proposer ...");
         pxa[0].Start(0, "hello");
         waitn(pxa, 0, npaxos);
+
         System.out.println("... Passed");
 
 
