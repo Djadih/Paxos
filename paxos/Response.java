@@ -13,6 +13,7 @@ public class Response implements Serializable {
     public int seq;
     public int n;
     public Object value;
+    public int highestDoneSeq;
 
     // Your constructor and methods here
     public Response(boolean ok, int seq, int n, Object value) {
@@ -20,5 +21,13 @@ public class Response implements Serializable {
         this.seq = seq;
         this.n = n;
         this.value = value;
+    }
+
+    public Response(boolean ok, int seq, int n, Object value, int highestDoneSeq) {
+        this.ok = ok;
+        this.seq = seq;
+        this.n = n;
+        this.value = value;
+        this.highestDoneSeq = highestDoneSeq;
     }
 }

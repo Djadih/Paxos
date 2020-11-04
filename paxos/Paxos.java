@@ -70,7 +70,7 @@ public class Paxos implements PaxosRMI, Runnable{
     }
 
     private Map<Integer, PaxosInstance> paxosInstances; // mapping from instance ID (sometimes called sequence number or just seq) to an instance of this Paxos peer (i.e. an instance of the server this Paxos object tries to model)
-    private int seq_highestNumberedEndedInstance; // sequence number of the highest-numbered instance that is no longer needed. This number should not appear in paxosInstances as keys.
+    public int[] highestDoneSeqs; // highest sequence number ever passed to each Paxos peer
     private int currSeq;
 
 
@@ -93,7 +93,8 @@ public class Paxos implements PaxosRMI, Runnable{
 
         // Your initialization code here
         paxosInstances = new HashMap<>();
-        seq_highestNumberedEndedInstance = -1;
+        highestDoneSeqs = new int[this.peers.length];
+        Arrays.fill(highestDoneSeqs, -1);
 
 
         // register peers, do not modify this part
@@ -182,8 +183,8 @@ public class Paxos implements PaxosRMI, Runnable{
     public void Start(int seq, Object value){
         // Your code here
 
-        // Ignore the proposal if seq <= this.seq_highestNumberedEndedInstance
-        if (seq <= this.seq_highestNumberedEndedInstance) {
+        // Ignore the proposal if seq < the minimal sequence number that is done for all servers
+        if (seq < Min()) {
             return;
         }
 
@@ -237,6 +238,8 @@ public class Paxos implements PaxosRMI, Runnable{
                     // 3.1. send "decide" request to all servers including itself
                     for (int id = 0; id < this.peers.length; ++id) {
                         responses[id] = ReliableCall("Decide", new Request(currSeq, n, valToPropose), id);
+                        // learn the highest number ever passed to Done() for server "id".
+                        if (responses[id] != null) { this.highestDoneSeqs[id] = responses[id].highestDoneSeq; }
                     }
                 }
             }
@@ -315,6 +318,7 @@ public class Paxos implements PaxosRMI, Runnable{
         }
         PaxosInstance me = this.paxosInstances.get(req.seq);
 
+
         boolean ok = false;
         if (me.state != State.Decided) {
             me.state = State.Decided;
@@ -322,7 +326,7 @@ public class Paxos implements PaxosRMI, Runnable{
             ok = true;
         }
 
-        return new Response(ok, req.seq, req.n, req.value); // the seq, n, value fields in the response are not used
+        return new Response(ok, req.seq, req.n, req.value, this.highestDoneSeqs[this.me]); // the seq, n, value fields in the response are not used
     }
 
     /**
@@ -333,7 +337,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Done(int seq) {
         // Your code here
-        this.seq_highestNumberedEndedInstance = seq;
+        this.highestDoneSeqs[this.me] = seq;
     }
 
 
@@ -377,7 +381,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public int Min(){
         // Your code here
-        return 0;
+        return Arrays.stream(this.highestDoneSeqs).min().getAsInt() + 1;
     }
 
 
@@ -396,8 +400,13 @@ public class Paxos implements PaxosRMI, Runnable{
         }
         PaxosInstance me = this.paxosInstances.get(seq);
 
+        State state = me.state;
 
-        return new retStatus(me.state, me.v_a);
+        if (seq < Min()) {
+            state = State.Forgotten;
+        }
+
+        return new retStatus(state, me.v_a);
     }
 
     /**

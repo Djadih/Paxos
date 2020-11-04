@@ -14,7 +14,6 @@ public class Request implements Serializable {
     public int n;
     public Object value;
 
-
     // Your constructor and methods here
     public Request(int seq, int n, Object value) {
         this.seq = seq;
