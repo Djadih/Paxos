@@ -8,7 +8,15 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-
+/*
+ TODO: 1. Read the testDeaf test and understand what the expected behavior is. How is it different from the
+           testBasic test?
+       2. Run the testDeaf test, and expect to see errors
+       3. What are the errors? and which method does it suggest we need to work on (a new method that we never touched/implemented
+       or a old method (damn, that's a bad sign then)).
+       4. read the Min() comments carefully and think about how to implement Min().
+       5. the next test....
+ */
 
 /**
  * This class is the main class you need to implement paxos instances.
@@ -45,8 +53,8 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public class PaxosInstance {
         public ProposalNumberGenerator gen; // gen.next() returns the next proposer number. Guaranteed the return number is totally ordered
-        public int n_p; // highest number in a prepare request to which this acceptor has responded
-        public int n_a; // proposal number of the highest-numbered proposal this acceptor has ever accepted
+        public int n_p; // highest number in a prepare request to which this acceptor has responded. This implies you should only update n_p in prepare request handler.
+        public int n_a; // proposal number of the highest-numbered proposal this acceptor has ever accepted. This implies you should only update n_a, v_a in accept request handler.
         public Object v_a; // proposal value of the highest-numbered proposal this acceptor has ever accepted.
         public Object valueOriginallyPlanned; // value originally planned to propose; passed from the client code in Start() method.
         public State state;
@@ -187,7 +195,7 @@ public class Paxos implements PaxosRMI, Runnable{
             Response[] responses = new Response[this.peers.length];
 
             // 0. Get the next proposal number
-            int n = paxosInstance.gen.next();
+            int n = paxosInstance.gen.next(); // e.g. 3 servers within one instance: server_1: 0, 3, 6, 9...    server_2: 1, 4, 7, 10, ...     server_3: 2, 5, 8, 11,....
             System.out.println("Phase 1, proposing n = " + n + " nPaxos = " + this.peers.length);
 
             // 1. Send a "prepare" request to all servers including itself
@@ -250,8 +258,12 @@ public class Paxos implements PaxosRMI, Runnable{
     public Response Prepare(Request req){
         // your code here
 
-        // get "me" (this server) at the instance req is referring to
+        // get "me" (this server) at the instance that this req is referring to
+        if (!this.paxosInstances.containsKey(req.seq)) {
+            this.paxosInstances.put(req.seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
+        }
         PaxosInstance me = this.paxosInstances.get(req.seq);
+
         boolean ok = false;
 
         if (req.n > me.n_p) {
@@ -264,11 +276,15 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response Accept(Request req){
         // your code here
+        if (!this.paxosInstances.containsKey(req.seq)) {
+            this.paxosInstances.put(req.seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
+        }
         PaxosInstance me = this.paxosInstances.get(req.seq);
         boolean ok = false;
 
+
         if (req.n >= me.n_p) {
-            me.n_p = req.n;
+//            me.n_p = req.n;
             me.n_a = req.n;
             me.v_a = req.value;
             ok = true;
@@ -279,8 +295,19 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response Decide(Request req){
         // your code here
-        this.paxosInstances.get(req.seq).state = State.Decided;
-        return new Response(true, req.seq, req.n, req.value); // the seq, n, value fields in the response are not used
+        if (!this.paxosInstances.containsKey(req.seq)) {
+            this.paxosInstances.put(req.seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
+        }
+        PaxosInstance me = this.paxosInstances.get(req.seq);
+
+        boolean ok = false;
+        if (me.state != State.Decided) {
+            me.state = State.Decided;
+            me.v_a = req.value;
+            ok = true;
+        }
+
+        return new Response(ok, req.seq, req.n, req.value); // the seq, n, value fields in the response are not used
     }
 
     /**
