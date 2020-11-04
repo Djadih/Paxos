@@ -142,6 +142,25 @@ public class Paxos implements PaxosRMI, Runnable{
         return callReply;
     }
 
+    private Response ReliableCall(String rmi, Request req, int id) {
+        if (!rmi.equals("Prepare") && !rmi.equals("Accept") && !rmi.equals("Decide")) {
+            throw new IllegalArgumentException();
+        }
+        Response result = null;
+
+        if (id == this.me) {
+            // if it's calling the handler on the same server then use function call
+            if (rmi.equals("Prepare")) { result = Prepare(req); }
+            else if (rmi.equals("Accept")) { result = Accept(req); }
+            else { result = Decide(req); }
+        } else {
+            // otherwise, use RMI
+            result = Call(rmi, req, id);
+        }
+
+        return result;
+    }
+
 
     /**
      * The application wants Paxos to start agreement on instance seq,
@@ -168,15 +187,12 @@ public class Paxos implements PaxosRMI, Runnable{
             return;
         }
 
-        // Ignore the proposal if it has a pending proposal
-        if (this.paxosInstances.containsKey(seq)) {
-            return;
-        }
-
         System.out.println("Start(" + seq + ", " + value + ").");
-        PaxosInstance paxosInstance = new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length));
+        if (!this.paxosInstances.containsKey(seq)) {
+            this.paxosInstances.put(seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
+        }
+        PaxosInstance paxosInstance = this.paxosInstances.get(seq);
         paxosInstance.valueOriginallyPlanned = value;
-        this.paxosInstances.put(seq, paxosInstance);
 
 
         this.currSeq = seq; // a hacky way to pass "seq" information to run().
@@ -201,11 +217,9 @@ public class Paxos implements PaxosRMI, Runnable{
             // 1. Send a "prepare" request to all servers including itself
             for (int id = 0; id < this.peers.length; ++id) {
                 // "prepare" requests don't have a value, only a proposal number
-                responses[id] = Call("Prepare", new Request(currSeq, n, null), id);
+                responses[id] = ReliableCall("Prepare", new Request(currSeq, n, null), id);
                 System.out.println("responses["+id+"] = " +responses[id]);
             }
-
-            System.out.println("prepare responses = " + responses);
 
             // 2. If received prepareOK from majority of acceptors
             if (isMajorityResponsesOK(responses)) {
@@ -215,14 +229,14 @@ public class Paxos implements PaxosRMI, Runnable{
 
                 // 2.2. send "accept" request to all servers including itself
                 for (int id = 0; id < this.peers.length; ++id) {
-                    responses[id] = Call("Accept", new Request(currSeq, n, valToPropose), id);
+                    responses[id] = ReliableCall("Accept", new Request(currSeq, n, valToPropose), id);
                 }
 
                 // 3. If received acceptOK from majority of acceptors
                 if (isMajorityResponsesOK(responses)) {
                     // 3.1. send "decide" request to all servers including itself
                     for (int id = 0; id < this.peers.length; ++id) {
-                        responses[id] = Call("Decide", new Request(currSeq, n, valToPropose), id);
+                        responses[id] = ReliableCall("Decide", new Request(currSeq, n, valToPropose), id);
                     }
                 }
             }
@@ -253,6 +267,7 @@ public class Paxos implements PaxosRMI, Runnable{
         }
         return result == null ? valuePlannedOriginally : result;
     }
+
 
     // RMI handler
     public Response Prepare(Request req){
@@ -376,7 +391,13 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public retStatus Status(int seq){
         // Your code here
-        return new retStatus(this.paxosInstances.get(seq).state, this.paxosInstances.get(seq).v_a);
+        if (!this.paxosInstances.containsKey(seq)) {
+            this.paxosInstances.put(seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
+        }
+        PaxosInstance me = this.paxosInstances.get(seq);
+
+
+        return new retStatus(me.state, me.v_a);
     }
 
     /**
