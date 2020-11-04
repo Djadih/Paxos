@@ -58,7 +58,7 @@ public class Paxos implements PaxosRMI, Runnable{
     }
 
     private Map<Integer, PaxosInstance> paxosInstances; // mapping from instance ID (sometimes called sequence number or just seq) to an instance of this Paxos peer (i.e. an instance of the server this Paxos object tries to model)
-    public int[] highestDoneSeqs; // highest sequence number ever passed to each Paxos peer
+    public int[] highestDoneSeqs; // highest sequence number ever passed to each Paxos peer in Done()
     private int currSeq;
 
 
@@ -300,7 +300,6 @@ public class Paxos implements PaxosRMI, Runnable{
             this.paxosInstances.put(req.seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
         }
         PaxosInstance me = this.paxosInstances.get(req.seq);
-
 
         boolean ok = false;
         if (me.state != State.Decided) {
