@@ -2,21 +2,9 @@ package paxos;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
 import java.rmi.registry.Registry;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-/*
- TODO: 1. Read the testDeaf test and understand what the expected behavior is. How is it different from the
-           testBasic test?
-       2. Run the testDeaf test, and expect to see errors
-       3. What are the errors? and which method does it suggest we need to work on (a new method that we never touched/implemented
-       or a old method (damn, that's a bad sign then)).
-       4. read the Min() comments carefully and think about how to implement Min().
-       5. the next test....
- */
 
 /**
  * This class is the main class you need to implement paxos instances.
@@ -188,7 +176,6 @@ public class Paxos implements PaxosRMI, Runnable{
             return;
         }
 
-        System.out.println("Start(" + seq + ", " + value + ").");
         if (!this.paxosInstances.containsKey(seq)) {
             this.paxosInstances.put(seq, new PaxosInstance(new ProposalNumberGenerator(this.me, this.peers.length)));
         }
@@ -197,7 +184,6 @@ public class Paxos implements PaxosRMI, Runnable{
 
 
         this.currSeq = seq; // a hacky way to pass "seq" information to run().
-        System.out.println("about to run run(). this.currSeq = " + this.currSeq);
         this.run();
     }
 
@@ -213,18 +199,15 @@ public class Paxos implements PaxosRMI, Runnable{
 
             // 0. Get the next proposal number
             int n = paxosInstance.gen.next(); // e.g. 3 servers within one instance: server_1: 0, 3, 6, 9...    server_2: 1, 4, 7, 10, ...     server_3: 2, 5, 8, 11,....
-            System.out.println("Phase 1, proposing n = " + n + " nPaxos = " + this.peers.length);
 
             // 1. Send a "prepare" request to all servers including itself
             for (int id = 0; id < this.peers.length; ++id) {
                 // "prepare" requests don't have a value, only a proposal number
                 responses[id] = ReliableCall("Prepare", new Request(currSeq, n, null), id);
-                System.out.println("responses["+id+"] = " +responses[id]);
             }
 
             // 2. If received prepareOK from majority of acceptors
             if (isMajorityResponsesOK(responses)) {
-                System.out.println("phase 2");
                 // 2.1. find the value to propose for proposal number n.
                 Object valToPropose = highestNumberedProposalValue(responses, paxosInstance.valueOriginallyPlanned);
 
@@ -381,7 +364,17 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public int Min(){
         // Your code here
-        return Arrays.stream(this.highestDoneSeqs).min().getAsInt() + 1;
+        int minSeq = Arrays.stream(this.highestDoneSeqs).min().getAsInt() + 1;
+        // clear up resource (paxosInstance) of this server for all instance with seq number < minSeq
+        removeForgottenPaxosInstances(minSeq);
+
+        return minSeq;
+    }
+
+    private void removeForgottenPaxosInstances(int minSeq) {
+        for (int key : Set.copyOf(this.paxosInstances.keySet())) {
+            if (key < minSeq) { this.paxosInstances.remove(key); }
+        }
     }
 
 
